@@ -1,36 +1,40 @@
 package net
 
 import spray.json._
+import Foo.NonEmptySeq
 
-case class FooWithStrings(xs: Foo.NonEmptyFoo)
+class NonEmptyCustomFormatter[A](implicit ev: A => JsValue, 
+							              ev2: JsValue => A, 
+							              manifest: scala.reflect.Manifest[A]) extends JsonFormat[NonEmptySeq[A]] {
+  override def read(json: JsValue): NonEmptySeq[A] = {
 
-object Foo extends DefaultJsonProtocol {
+    // Throws exception upon de-serialization error!
+    def buildArrayOfTypeA(xs: Seq[JsValue]): Seq[A] = xs match {
+      case Seq(x, tail @ _ *) => ev2(x) +: buildArrayOfTypeA(tail)
+	  case Seq()			  => Seq()
+	  case _ 				  => deserializationError(s"Array must consist of all ${manifest.toString}'s")
+    }
+
+  	json match {
+  	  case JsArray(Seq(head, tail @ _ *)) => ( ev2(head), buildArrayOfTypeA(tail) )
+  	  case JsArray(Seq())				  => deserializationError("must be non-empty array of JsString's")
+    }
+  }
+    
+  override def write(xs: NonEmptySeq[A]): JsValue = {
+    JsArray( ev(xs._1) +: xs._2.map(ev(_)): _* )
+  }
+}
+
+object Foo /* extends DefaultJsonProtocol */ {
 
 	type NonEmptySeq[A] = (A, Seq[A])
+	// type NonEmptyFoo = NonEmptySeq[String]
 
-	type NonEmptyFoo = NonEmptySeq[String]
+	implicit def stringToJsValue(x: String): JsValue = JsString(x)
 
-	def toSeq[A](neq: NonEmptySeq[A]): Seq[A] = 
-		neq._1 +: neq._2
-
-	implicit object NonEmptyModelFormat extends JsonFormat[NonEmptyFoo] {
-		def write(neq: NonEmptyFoo): JsValue = {
-	     val jsonStrings: Seq[JsString] = toSeq(neq).map(JsString(_))
-	     JsArray( jsonStrings: _* ) 
-	 	}
-	   
-	    def read(value: JsValue): NonEmptyFoo = {
-	      def buildStringArrayOrFail(xs: Seq[JsValue]): Seq[JsString] = xs match {
-		    case Seq(x@JsString(_), tail @ _ *) => x +: buildStringArrayOrFail(tail)
-		    case Seq()							=> Seq()
-		    case _ 					   		    => deserializationError("Array must consist of all JsString's.")
-		  }
-
-	      value match {
-		    case JsArray(Seq())     				        => deserializationError("must be non-empty array of JsString's!")
-		    case JsArray(Seq(head@JsString(_), tail @ _ *)) => (head.value, buildStringArrayOrFail(tail).map(_.value))
-		    case _ 			  						        => deserializationError("must be non-empty array of JsString's")
-	      }
-		}
+	implicit def jsValueToString(json: JsValue): String = json match {
+		case JsString(x) => x
+		case _ 		     => deserializationError(s"${json} is not a String!")
 	}
 }
